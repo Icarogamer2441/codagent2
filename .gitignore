@@ -7,7 +7,7 @@ dist
 *.pyd
 *.pyw
 *.pyz
-.codagent2*
+.coda2*
 .env
 .venv
 .idea
