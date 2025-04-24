@@ -1,0 +1,15 @@
+*.egg*
+test
+build
+dist
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+.codagent2*
+.env
+.venv
+.idea
+.vscode
+.pytest_cache
