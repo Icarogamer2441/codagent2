@@ -12,4 +12,4 @@ dist
 .venv
 .idea
 .vscode
-.pytest_cache
+codagent2/__pycache__

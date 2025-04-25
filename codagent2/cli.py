@@ -151,28 +151,27 @@ def ask_confirmation(prompt_text: str) -> bool:
     """Asks the user for y/n confirmation using prompt_toolkit."""
     global thinking_status, trust_mode_enabled
     
-    # If trust mode is enabled for file operations, return True automatically
-    # But only if the prompt suggests this is a file operation (not terminal command)
-    if trust_mode_enabled and any(file_term in prompt_text.lower() for file_term in 
-                                 ["file", "directory", "folder", "path", "create", "write", 
-                                  "overwrite", "modify", "rename", "applying"]):
-        console.print(f"[dim]Trust mode enabled: Auto-confirming file operation.[/dim]")
+    # Destructive operations that always require confirmation
+    destructive_terms = ["delete", "remove", "uninstall", "rm ", "kill", 
+                        "shutdown", "format", "wipe", "drop", "truncate"]
+    
+    # Only auto-confirm if trust mode is enabled
+    if trust_mode_enabled:
+        console.print(f"[dim]Trust mode enabled: Auto-confirming operation.[/dim]")
         console.print("[bold green]Auto-confirmed.[/bold green]")
         return True
     
+    # For all operations when trust mode is disabled
     session = PromptSession()
     while True:
         try:
-            # Add extra spacing before the prompt to make it more visible
             console.print("")
-            # Important: Turn off the thinking status if it's active
-            # This ensures it doesn't overlap with user input
             if thinking_status:
                 thinking_status.stop()
 
             response = session.prompt(
                 HTML(f"<yellow><b>>> {prompt_text}</b></yellow> (y/n) ")).strip().lower()
-            console.print("")  # Add spacing after input
+            console.print("")
             if response == 'y':
                 console.print("[bold green]Confirmed.[/bold green]")
                 return True
@@ -679,16 +678,14 @@ def create_file(path: str, content: str) -> str:
 def write_file(path: str, content: str) -> str:
     """Overwrites an existing file at the specified path with the given content. Requires user confirmation."""
     # Get the global thinking_status if it exists
-    global thinking_status, agent_context
+    global thinking_status, agent_context, auto_verify_enabled
 
     # Process content to handle newlines properly
-    # Replace literal "\n" with actual newlines if they're not already processed
     if "\\n" in content and "\n" not in content:
         content = content.replace("\\n", "\n")
 
     console.print(Panel(f"[bold yellow]Action Proposed:[/bold yellow] Overwrite file '{escape(path)}'",
-                  # Escape path
-                        title="[bold yellow]Confirmation Required[/bold yellow]", expand=False))
+                  title="[bold yellow]Confirmation Required[/bold yellow]", expand=False))
     try:
         with open(path, 'r', encoding='utf-8') as f:
             old_content = f.read()
@@ -696,51 +693,39 @@ def write_file(path: str, content: str) -> str:
                       title="[bold yellow]Current File Content[/bold yellow]", expand=False))
     except FileNotFoundError:
         console.print(Panel(
-            # Escape path
             f"[bold red]Warning:[/bold red] File '{escape(path)}' not found. This operation will create it instead of overwriting.", expand=False))
-        old_content = None  # Indicate that there was no old content
+        old_content = None
     except Exception as e:
         console.print(Panel(
-            # Escape path
             f"[bold red]Error:[/bold red] Could not read current file content for '{escape(path)}'. Reason: {e}", expand=False))
-        old_content = None  # Indicate failure to read old content
+        old_content = None
 
     # Strip leading/trailing whitespace, including newlines
     content_stripped = content.strip()
     console.print(Panel(Syntax(content_stripped, "text", theme="monokai", line_numbers=True),
                   title="[bold yellow]New File Content[/bold yellow]", expand=False))
 
-    # Use custom confirmation prompt with thinking_status
-    # Escape path
     if ask_confirmation(f"Do you want to proceed with overwriting '{escape(path)}'? (y/n)"):
         try:
-            # Ensure parent directory exists if path includes directories
             os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
             with open(path, 'w', encoding='utf-8') as f:
-                f.write(content_stripped)  # Write stripped content
+                f.write(content_stripped)
             console.print(Panel(
-                # Escape path
                 f"[bold green]Success:[/bold green] File '{escape(path)}' overwritten.", expand=False))
             
             # Track this file write operation
             if path not in agent_context["last_modified_files"]:
                 agent_context["last_modified_files"].insert(0, path)
-                # Keep the list to a reasonable size
                 if len(agent_context["last_modified_files"]) > 5:
                     agent_context["last_modified_files"].pop()
             
-            # Add this action to context
-            agent_context["last_actions"].insert(0, {"action": "write_file", "path": path})
-            if len(agent_context["last_actions"]) > 10:
-                agent_context["last_actions"].pop()
-            
-            # Analyze code for issues if it's a code file
-            analyze_code(path, content_stripped)
+            # Only analyze code if auto verification is enabled
+            if auto_verify_enabled:
+                analyze_code(path, content_stripped)
                 
             return f"File '{path}' overwritten successfully."
         except Exception as e:
             console.print(Panel(
-                # Escape path
                 f"[bold red]Error:[/bold red] Failed to overwrite file '{escape(path)}'. Reason: {e}", expand=False))
             return f"Failed to overwrite file '{path}'. Reason: {e}"
     else:
@@ -960,7 +945,7 @@ def run_command(command: str) -> str:
 def modify_file(path: str, search_text: str, replace_text: str) -> str:
     """Modifies a file by replacing occurrences of search_text with replace_text. Requires user confirmation."""
     # Get the global thinking_status if it exists
-    global thinking_status, agent_context
+    global thinking_status, agent_context, auto_verify_enabled
 
     # Check if file exists
     if not os.path.exists(path):
@@ -1048,7 +1033,7 @@ def modify_file(path: str, search_text: str, replace_text: str) -> str:
             if len(agent_context["last_actions"]) > 10:
                 agent_context["last_actions"].pop()
             
-            # Analyze code for issues if it's a code file and auto verification is enabled
+            # Only analyze code if auto verification is enabled
             if auto_verify_enabled:
                 analyze_code(path, new_content)
                 
@@ -1495,7 +1480,7 @@ def find_insertion_point(content_lines, context_before, hint_line):
 def apply_diff(path: str, diff_content: str) -> str:
     """Applies a diff to a file. The diff should be in unified diff format. Requires user confirmation."""
     # Get the global thinking_status if it exists
-    global thinking_status, agent_context
+    global thinking_status, agent_context, auto_verify_enabled
 
     # Check if file exists
     if not os.path.exists(path):
@@ -1643,8 +1628,9 @@ def apply_diff(path: str, diff_content: str) -> str:
                 if len(agent_context["last_actions"]) > 10:
                     agent_context["last_actions"].pop()
                 
-                # Analyze code for issues if it's a code file
-                analyze_code(path, new_content)
+                # Only analyze code if auto verification is enabled
+                if auto_verify_enabled:
+                    analyze_code(path, new_content)
                     
                 return f"Successfully applied diff to file '{path}'."
             except PermissionError:
@@ -1695,10 +1681,10 @@ def setup_agent(api_key: str):
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-preview-04-17", google_api_key=api_key, temperature=temperature)
 
-    # Tools list (order doesn't strictly matter for tool-calling models, but can aid readability)
-    # Reorder to put modify_file before apply_diff to encourage its use
+    # Updated tools list including hardplan
     tools = [list_directory, read_file, create_file, write_file,
-             rename_path, delete_path, run_command, modify_file, apply_diff]
+             rename_path, delete_path, run_command, modify_file, 
+             apply_diff, hardplan]
 
     # Define the agent prompt
     creative_addition = """
@@ -1714,122 +1700,38 @@ You are currently in CREATIVE MODE. This means:
         ("system", f"""You are Coda2, an AI assistant that can perform tasks related to code development, file system management, and terminal operations.
 You can list directory contents, read files, create files, write to files, rename files/directories, delete files/directories, and run terminal commands. You can also modify specific text in files.{creative_addition}
 
+IMPORTANT DIRECTIVES:
+1. For complex tasks that require multiple steps or significant planning, use the `hardplan` tool first
+2. After receiving a plan from `hardplan`, execute it step by step
+3. Make all necessary assumptions to complete the task
+4. Only stop if you encounter an absolute blocker that prevents execution
+5. For file operations, use sensible defaults and just do them
+6. For terminal commands, run them directly unless they are destructive
+7. Show your work through console output rather than asking permission
+
+EXECUTION RULES:
+- If a task seems complex (requires >3 steps or significant changes), use `hardplan`
+- Execute plans step by step after they're created
+- If asked to create something, CREATE IT IMMEDIATELY
+- If asked to modify code, MODIFY IT IMMEDIATELY
+- If you need information, FIND IT YOURSELF (read files, list directories)
+- Never explain why you can't do something - just do as much as possible
+
+DESTRUCTIVE OPERATIONS POLICY:
+- For delete/remove operations, still ask confirmation
+- For all other operations, JUST DO THEM
+
 You have access to the following tools:
-- `list_directory(path: str = '.')`: Lists the contents of a directory. Useful for understanding the project structure.
-- `read_file(path: str)`: Reads the content of a file. Useful for examining existing code or configuration.
-- `create_file(path: str, content: str)`: Creates a new file with specified content.
-- `write_file(path: str, content: str)`: Overwrites an existing file with specified content.
-- `rename_path(old_path: str, new_path: str)`: Renames a file or directory.
-- `delete_path(path: str)`: Deletes a file or directory. USE WITH EXTREME CAUTION!
-- `run_command(command: str)`: Runs a terminal command and returns its output. **You can and should use this to execute terminal commands directly when needed.**
-- `modify_file(path: str, search_text: str, replace_text: str)`: **Searches for specific text in a file and replaces it with new text.** This is the preferred way to make changes to files. The tool handles finding and replacing the exact text you specify.
-- `apply_diff(path: str, diff_content: str)`: **Applies a diff to modify a file.** This is an alternative way to make changes to code files for complex modifications where search/replace isn't suitable.
-
-## IMPORTANT FOR FILE MODIFICATIONS:
-PREFER using modify_file (search/replace) for most code changes as it provides a simple and direct way to make modifications. The search/replace approach lets you precisely target the exact text that needs changing without having to worry about line numbers or diff syntax.
-
-For most changes, search/replace is recommended because:
-1. It's simpler and more straightforward
-2. You can focus on the exact text to change rather than diff formatting
-3. It works well across different file types
-4. It's easier to understand what's being changed
-
-You should:
-- Read the file first with read_file
-- Identify the exact text to search for
-- Provide the replacement text
-- Use modify_file to make the change
-
-## Using the terminal:
-You have full access to execute terminal commands through the `run_command` tool. This allows you to:
-1. Run any bash/shell command the user would run manually
-2. Execute programming language interpreters (python, node, etc.)
-3. Use command-line tools (grep, find, git, etc.)
-4. Install packages or dependencies
-5. Start services or run applications
-
-When using terminal commands:
-- Always explain what a command will do before running it
-- Use commands that provide verbose output when possible
-- For potentially destructive operations, use safer versions (e.g., `rm -i` instead of just `rm`)
-- You can chain multiple commands using && or ; as needed
-- For commands that might run indefinitely (servers, watching files), add timeout limits or run in background
-
-## Using search/replace for code changes:
-When modifying code files, use the `modify_file` tool which provides search and replace functionality. Here's how:
-
-1. Read the original file content using `read_file`.
-2. Identify the exact text you want to replace.
-3. Create the replacement text that should go in its place.
-4. Use `modify_file` with the file path, search text, and replacement text.
-
-This approach is precise because it targets the exact text you specify, and the tool will show you how many occurrences were found before making any changes.
-
-## Alternative: Using diffs for complex changes
-The `apply_diff` tool can be used for particularly complex changes where search/replace isn't suitable. A unified diff looks like this:
-```
---- a/path/to/file.py
-+++ b/path/to/file.py
-@@ -10,7 +10,7 @@
- context line
- context line
--line to remove
-+line to add
- context line
- context line
-```
-
-However, this approach is more complex and usually not necessary for most changes.
-
-## When to use each file modification tool:
-- Use `modify_file` for most code changes and text replacements (recommended approach)
-- Only use `apply_diff` for complex multi-line changes where simple search/replace isn't feasible
-- Use `write_file` when completely replacing a file's content
-- Use `create_file` for new files
-
-## How the search/replace system works:
-The `modify_file` tool performs an exact string match and replacement in the target file. Here's what you need to know:
-
-1. **Exact Matching**: The search operation performs EXACT string matching (including whitespace and newlines). It will not interpret regex patterns or special characters.
-
-2. **Multiple Replacements**: If the search text appears multiple times in the file, ALL occurrences will be replaced simultaneously. The tool will show you the count of replacements before confirming.
-
-3. **Preserving Formatting**: The tool preserves all formatting, indentation and whitespace outside of the matched text. Only the exact matched text is replaced.
-
-4. **Multiline Support**: The search text can span multiple lines (including line breaks). This is especially useful for replacing code blocks.
-
-5. **Helpful Suggestions**: If the exact search text isn't found, the tool will suggest similar text patterns that might be what you're looking for.
-
-## Best practices for using search/replace:
-
-1. **Always Read First**: Always use `read_file` to view the target file's content before attempting to modify it. This helps you identify the exact text to replace.
-
-2. **Be Specific**: Include enough context in your search text to ensure you're only replacing what you intend to. For code, include unique identifiers, function names, or distinctive patterns.
-
-3. **Include Whitespace Correctly**: Pay careful attention to spaces, tabs, and newlines in both search and replace text. Ensure indentation matches exactly.
-
-4. **Partial Updates**: For large files, prefer targeting specific blocks rather than trying to replace the entire file content.
-
-5. **Special Characters**: Be mindful of special characters (quotes, backslashes, etc.) as they will be matched literally.
-
-6. **Line Endings**: The tool handles different line endings (\\n, \\r\\n) automatically, but be aware they may affect matching.
-
-7. **Watch the Count**: Always check the replacement count before confirming to ensure you're not making more changes than intended.
-
-When you need to perform an action:
-1. Think step-by-step about the user's request and how the tools can help.
-2. If the request involves modifying specific text in a file, use the `modify_file` tool and identify the exact text to search for and replace. If it involves creating or completely replacing a file, use `create_file` or `write_file`.
-3. If the request involves interacting with the terminal, use the `run_command` tool.
-4. If you need to inspect the file system, use `list_directory` or `read_file`.
-5. Formulate a plan, explaining it clearly to the user.
-6. Use the appropriate tool by calling the tool function with the required arguments. **Do not output file content or modification patterns directly in your response unless you are showing an example or explaining, but use the tools to make the changes.**
-7. You must ALWAYS ask for user confirmation by using the tools themselves, as they are designed to prompt the user. The user expects to type 'y' or 'n' followed by Enter after a proposed action.
-8. After a tool execution, analyze the tool's output (the string returned by the tool function) and continue the process if necessary, or provide a final response to the user based on the tool's result.
-9. Respond conversationally and provide updates on your progress and findings.
-
-IMPORTANT: For code modifications, use the `modify_file` tool (search/replace) as the primary approach for most changes.
-
-Begin!"""),
+- `list_directory` - To see contents of directories
+- `read_file` - To read file contents
+- `create_file` - To create new files
+- `write_file` - To overwrite existing files
+- `rename_path` - To rename files or directories
+- `delete_path` - To delete files or directories (requires confirmation)
+- `run_command` - To execute terminal commands
+- `modify_file` - To search and replace text in files
+- `apply_diff` - To apply diffs to files
+- `hardplan` - For complex tasks that need detailed planning"""),
         ("placeholder", "{chat_history}"),
         ("human", "{input}"),
         ("placeholder", "{agent_scratchpad}"),
@@ -2567,6 +2469,81 @@ User request: {user_input}
         # If we have accumulated a lot of messages, summarize older ones to save context
         if len(chat_history) > 8:  # Keep the most recent 8 messages
             chat_history = summarize_chat_history(chat_history, 8)
+
+
+@tool
+def hardplan(task_description: str) -> str:
+    """Creates a detailed step-by-step plan for complex tasks. 
+    Use this when a task requires significant planning or multiple steps.
+    The plan will be returned to the AI for execution."""
+    global thinking_status, agent_context
+    
+    try:
+        # Get the LLM for planning
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash-preview-04-17", 
+            google_api_key=os.environ.get("GOOGLE_API_KEY"), 
+            temperature=0  # Use zero temperature for planning
+        )
+        
+        # Ensure any existing status is stopped
+        if thinking_status:
+            thinking_status.stop()
+            thinking_status = None
+            
+        # Set up thinking status
+        thinking_status = Status("Planning complex task...", spinner="dots", console=console)
+        thinking_status.start()
+        
+        # Prepare the planning prompt with context
+        context = f"""
+CONTEXT:
+- Recent files modified: {', '.join(agent_context['last_modified_files'][:3]) if agent_context['last_modified_files'] else 'None'}
+- Recent actions: {str(agent_context['last_actions'][:3]) if agent_context['last_actions'] else 'None'}
+"""
+        
+        prompt = f"""You are an expert planner. Create a detailed, step-by-step plan to accomplish the following task:
+
+{task_description}
+
+{context}
+
+The plan should be:
+1. Very specific and actionable
+2. Broken down into clear, discrete steps
+3. Include any necessary research or information gathering steps
+4. Note potential challenges and solutions
+5. Specify which tools will be needed for each step
+
+Format your response as a numbered list with clear steps. Each step should be self-contained and executable.
+
+PLAN:"""
+        
+        messages = [
+            SystemMessage(content="You're an expert at breaking down complex technical tasks into executable steps."),
+            HumanMessage(content=prompt)
+        ]
+        
+        response = llm.invoke(messages)
+        plan = response.content.strip()
+        
+        # Stop thinking status
+        if thinking_status:
+            thinking_status.stop()
+            thinking_status = None
+            
+        # Display the plan
+        console.print(Panel(plan, title="[bold blue]Complex Task Plan[/bold blue]", expand=False))
+        
+        # Return the plan for the agent to execute
+        return f"PLAN CREATED:\n{plan}"
+    except Exception as e:
+        # Ensure thinking status is stopped on error
+        if thinking_status:
+            thinking_status.stop()
+            thinking_status = None
+        console.print(f"[bold red]Error during planning: {e}[/bold red]")
+        return f"Error: Failed to create plan. Reason: {e}"
 
 
 if __name__ == "__main__":
